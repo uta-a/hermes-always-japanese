@@ -53,7 +53,12 @@ ln -s "$PWD" ~/.hermes/plugins/always-japanese
 hermes plugins enable always-japanese
 ```
 
-GitHub に公開した後は、`hermes plugins install <owner>/<repo>` でも入れられます。
+GitHub から入れる場合:
+
+```sh
+hermes plugins install uta-a/hermes-always-japanese
+hermes plugins enable always-japanese
+```
 
 ## 制約
 
