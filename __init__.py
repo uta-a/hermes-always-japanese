@@ -9,15 +9,18 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from typing import Any
 
 DEFAULT_LANGUAGE = "日本語"
 MARKER = "[always-japanese]"
+# JSON オブジェクトの結果に埋め込むときのキー。
+JSON_KEY = "always_japanese"
 
 # Hermes は大きなツール結果を先頭のプレビューだけ残して退避する（既定 100K 文字、
 # MCP は 50K 文字、小さいモデルではさらに小さい）。末尾に付けると消えるため、
-# この長さを超える結果では先頭に付ける。
+# この長さを超える JSON オブジェクトの結果では先頭に埋め込む。
 LARGE_RESULT_CHARS = 20_000
 
 
@@ -110,6 +113,9 @@ class _Reminder:
             return None
         if self._is_child(session_id):
             return None
+        updated = _with_reminder(result, self.reminder)
+        if updated is None:
+            return None
         # 並列のツール呼び出しは結果がまとめて次の要求に載るため、
         # モデルの応答 1 回（api_request_id）につき 1 つだけ付ける。
         # id が取れないときは毎回付ける。
@@ -118,10 +124,43 @@ class _Reminder:
                 if self._tagged.get(session_id) == api_request_id:
                     return None
                 self._tagged[session_id] = api_request_id
-        note = f"{MARKER} {self.reminder}"
-        if len(result) > LARGE_RESULT_CHARS:
-            return f"{note}\n\n{result}"
-        return f"{result}\n\n{note}"
+        return updated
+
+
+def _with_reminder(result: str, reminder: str) -> str | None:
+    """ツール結果にリマインダーを足した文字列を返す。足せないときは None。
+
+    Hermes は結果を JSON として解析して失敗（exit_code、error など）を判定する。
+    JSON オブジェクトの後ろにテキストを足すと解析に失敗し、失敗が成功扱いになるため、
+    JSON オブジェクトには ``JSON_KEY`` を埋め込み、妥当な JSON のまま返す。
+    それ以外の結果は末尾にだけ足す。文字列結果の失敗は先頭（"Error" で始まるか、
+    先頭 500 文字の "error"）で判定されるため、先頭には付けない。
+    """
+    try:
+        parsed = json.loads(result)
+    except (ValueError, TypeError):
+        parsed = None
+    if not isinstance(parsed, dict):
+        return f"{result}\n\n{MARKER} {reminder}"
+    if JSON_KEY in parsed:
+        return None
+    # 元の書式を保つため、再シリアライズせず、先頭の { の直後か末尾の } の直前に差し込む。
+    # 大きな結果は先頭のプレビューだけ残して退避されるので、先頭に入れる。
+    pair = f"{json.dumps(JSON_KEY)}: {json.dumps(reminder, ensure_ascii=False)}"
+    if not parsed:
+        candidate = "{" + pair + "}"
+    elif len(result) > LARGE_RESULT_CHARS:
+        start = result.index("{") + 1
+        candidate = f"{result[:start]}{pair}, {result[start:]}"
+    else:
+        end = result.rindex("}")
+        candidate = f"{result[:end]}, {pair}{result[end:]}"
+    try:
+        if json.loads(candidate) == {**parsed, JSON_KEY: reminder}:
+            return candidate
+    except ValueError:
+        pass
+    return None
 
 
 def register(ctx: Any) -> None:

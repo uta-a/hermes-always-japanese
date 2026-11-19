@@ -36,16 +36,21 @@ def _note(language: str = "日本語") -> str:
 
 class AlwaysJapaneseTest(unittest.TestCase):
     settings: dict | None = None
+    symlink = False
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         tmp = Path(self._tmp.name)
         home = tmp / ".hermes"
         dest = home / "plugins" / PLUGIN_NAME
-        shutil.copytree(
-            PLUGIN_SRC, dest,
-            ignore=shutil.ignore_patterns(".git", "tests", "__pycache__", "*.md", "LICENSE"),
-        )
+        if self.symlink:
+            dest.parent.mkdir(parents=True)
+            dest.symlink_to(PLUGIN_SRC, target_is_directory=True)
+        else:
+            shutil.copytree(
+                PLUGIN_SRC, dest,
+                ignore=shutil.ignore_patterns(".git", "tests", "__pycache__", "*.md", "LICENSE"),
+            )
         plugins_cfg: dict = {"enabled": [PLUGIN_NAME]}
         if self.settings is not None:
             plugins_cfg["entries"] = {PLUGIN_NAME: {"settings": self.settings}}
@@ -102,7 +107,7 @@ class DefaultTest(AlwaysJapaneseTest):
 
     def test_エラー結果にも足す(self):
         out = self.transform('{"error": "boom"}')
-        self.assertTrue(out.endswith(_note()))
+        self.assertEqual(json.loads(out), {"error": "boom", "always_japanese": _reminder()})
 
     def test_並列のツール結果には応答1回につき1つだけ足す(self):
         a = self.transform("a", api_request_id="t1:api:1")
@@ -125,11 +130,55 @@ class DefaultTest(AlwaysJapaneseTest):
         self.hook("on_session_end", session_id="s1", completed=True, interrupted=False, model="m", platform="cli")
         self.assertIsNotNone(self.transform("b"))
 
-    def test_大きな結果では先頭に足す(self):
-        big = "x" * 30_000
+    def test_JSON_オブジェクトにはキーとして埋め込み妥当な_JSON_を保つ(self):
+        src = '{"output": "", "exit_code": 1, "error": "boom"}'
+        out = self.transform(src)
+        self.assertEqual(json.loads(out), {**json.loads(src), "always_japanese": _reminder()})
+        self.assertTrue(out.startswith('{"output"'))
+
+    def test_空の_JSON_オブジェクトにも埋め込む(self):
+        self.assertEqual(json.loads(self.transform("{}")), {"always_japanese": _reminder()})
+
+    def test_大きな_JSON_オブジェクトでは先頭に埋め込む(self):
+        src = json.dumps({"output": "x" * 30_000, "exit_code": 0})
+        out = self.transform(src)
+        self.assertTrue(out.startswith('{"always_japanese"'))
+        self.assertEqual(json.loads(out)["exit_code"], 0)
+
+    def test_大きなテキストでも先頭には付けない(self):
+        big = "Error: " + "x" * 30_000
         out = self.transform(big)
-        self.assertTrue(out.startswith(_note()))
-        self.assertTrue(out.endswith(big))
+        self.assertTrue(out.startswith(big))
+        self.assertTrue(out.endswith(_note()))
+
+    def test_JSON_の配列はテキストとして末尾に足す(self):
+        self.assertEqual(self.transform("[1, 2]"), f"[1, 2]\n\n{_note()}")
+
+    def test_既にキーがある_JSON_は変えない(self):
+        self.assertIsNone(self.transform('{"always_japanese": "x"}'))
+
+    def test_Hermes_の失敗判定が追記の前後で変わらない(self):
+        from agent.display import _detect_tool_failure
+
+        big = "y" * 30_000
+        cases = [
+            ("terminal", json.dumps({"output": "not found", "exit_code": 127, "error": "command failed"})),
+            ("terminal", json.dumps({"output": big, "exit_code": 2})),
+            ("terminal", json.dumps({"output": "ok", "exit_code": 0})),
+            ("read_file", json.dumps({"success": False, "error": "No such file"})),
+            ("read_file", json.dumps({"success": True, "content": big})),
+            ("mcp_server_tool", json.dumps({"isError": True, "error": "upstream failed"})),
+            ("mcp_server_tool", "Error: upstream returned 500"),
+            ("mcp_server_tool", "Error: " + big),
+            ("web_extract", "plain text result"),
+            ("web_extract", '[{"error": "bad"}]'),
+        ]
+        for i, (tool, src) in enumerate(cases):
+            with self.subTest(tool=tool, case=i):
+                out = self.transform(src, api_request_id=f"t1:api:{i}")
+                self.assertIsNotNone(out)
+                self.assertNotEqual(out, src)
+                self.assertEqual(_detect_tool_failure(tool, out), _detect_tool_failure(tool, src))
 
     def test_文字列以外の結果は変えない(self):
         self.assertIsNone(self.transform([{"type": "text", "text": "hi"}]))
@@ -149,6 +198,14 @@ class DefaultTest(AlwaysJapaneseTest):
             child_role="leaf", child_summary="", child_status="completed", tool_call_history=[], duration_ms=1,
         )
         self.assertEqual(self.pre_llm(session_id="child"), [{"context": _reminder()}])
+
+
+class SymlinkInstallTest(AlwaysJapaneseTest):
+    symlink = True
+
+    def test_シンボリックリンクで置いても読み込める(self):
+        self.assertEqual(self.pre_llm(), [{"context": _reminder()}])
+        self.assertEqual(self.transform("o"), f"o\n\n{_note()}")
 
 
 class LanguageSettingTest(AlwaysJapaneseTest):
