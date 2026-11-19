@@ -4,7 +4,6 @@ version: 0.1.0
 description: "英語のツール出力に引っ張られず、常に日本語で返答させるリマインダーを毎ターン差し込む"
 author: "uta-a"
 license: MIT
-homepage: https://github.com/uta-a/always-japanese
 kind: standalone
 tags: [language, japanese]
 provides_hooks:
