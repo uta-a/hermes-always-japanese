@@ -1,0 +1,26 @@
+manifest_version: 2
+name: always-japanese
+version: 0.1.0
+description: "英語のツール出力に引っ張られず、常に日本語で返答させるリマインダーを毎ターン差し込む"
+author: "uta-a"
+license: MIT
+homepage: https://github.com/uta-a/always-japanese
+kind: standalone
+tags: [language, japanese]
+provides_hooks:
+  - pre_llm_call
+  - transform_tool_result
+  - subagent_start
+  - subagent_stop
+  - on_session_end
+config_schema:
+  language:
+    type: str
+    default: "日本語"
+    label: "返答言語"
+    description: "モデルに返答させる言語"
+  on_tool_call:
+    type: bool
+    default: true
+    label: "ツール結果にも差し込む"
+    description: "ツール呼び出しの結果にもリマインダーを付ける（モデルの応答 1 回につき 1 つ）"
